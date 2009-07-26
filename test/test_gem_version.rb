@@ -141,12 +141,12 @@ class TestGemVersion < RubyGemTestCase
   end
 
   def test_normalize
-    assert_equal [0],         Gem::Version.new("").normalize.map { |part| part.value }
-    assert_equal [0],         Gem::Version.new("0").normalize.map { |part| part.value }
-    assert_equal [1],         Gem::Version.new("1").normalize.map { |part| part.value }
-    assert_equal [1],         Gem::Version.new("1.0").normalize.map { |part| part.value }
-    assert_equal [1, 1],      Gem::Version.new("1.1").normalize.map { |part| part.value }
-    assert_equal [1, 1, "a"], Gem::Version.new("1.1.a").normalize.map { |part| part.value }
+    assert_equal [0],         Gem::Version.new("").normalize
+    assert_equal [0],         Gem::Version.new("0").normalize
+    assert_equal [1],         Gem::Version.new("1").normalize
+    assert_equal [1],         Gem::Version.new("1.0").normalize
+    assert_equal [1, 1],      Gem::Version.new("1.1").normalize
+    assert_equal [1, 1, "a"], Gem::Version.new("1.1.a").normalize
   end
 
   def test_ok
@@ -184,10 +184,10 @@ class TestGemVersion < RubyGemTestCase
   end
 
   def test_parse_parts_from_version_string
-    assert_equal [], part_values(Gem::Version.new("").parse_parts_from_version_string)
-    assert_equal [1], part_values(Gem::Version.new("1").parse_parts_from_version_string)
-    assert_equal [1, 0], part_values(Gem::Version.new("1.0").parse_parts_from_version_string)
-    assert_equal [1, 0, "a"], part_values(Gem::Version.new("1.0.a").parse_parts_from_version_string)
+    assert_equal [], Gem::Version.new("").parts
+    assert_equal [1], Gem::Version.new("1").parts
+    assert_equal [1, 0], Gem::Version.new("1.0").parts
+    assert_equal [1, 0, "a"], Gem::Version.new("1.0.a").parts
   end
 
   def test_prerelease
@@ -199,7 +199,7 @@ class TestGemVersion < RubyGemTestCase
     refute Gem::Version.new('2.9').prerelease?
     refute Gem::Version.new('22.1.50.0').prerelease?
   end
-  
+
   def test_release
     assert_equal Gem::Version.new('1.2.0'), Gem::Version.new('1.2.0.a').release
     assert_equal Gem::Version.new('1.1'),   Gem::Version.new('1.1.rc10').release
@@ -219,7 +219,7 @@ class TestGemVersion < RubyGemTestCase
     assert_adequate(  "1.4.5", "~> 1.4.4")
     assert_inadequate("1.5",   "~> 1.4.4")
     assert_inadequate("2.0",   "~> 1.4.4")
-    
+
     assert_inadequate("1.1.pre", "~> 1.0.0")
     assert_adequate(  "1.1.pre", "~> 1.1")
     assert_inadequate("2.0.a",   "~> 1.0")
@@ -264,6 +264,30 @@ class TestGemVersion < RubyGemTestCase
     assert_equal "5.2.4", v.to_s
   end
 
+  def test_marshal
+    v = Gem::Version.new("5.2.4")
+    assert_equal v, Marshal.load(Marshal.dump(v))
+    assert_equal v, Marshal.load(Marshal.dump(Gem::Version.new([5,2,4])))
+  end
+
+  def test_marshal_alpha
+    v = Gem::Version.new("5.2.4.a")
+    assert_equal v, Marshal.load(Marshal.dump(v))
+    assert_equal v, Marshal.load(Marshal.dump(Gem::Version.new([5,2,4,"a"])))
+  end
+
+  def test_yaml
+    v = Gem::Version.new("5.2.4")
+    assert_equal v, YAML.load(YAML.dump(v))
+    assert_equal v, YAML.load(YAML.dump(Gem::Version.new([5,2,4])))
+  end
+
+  def test_marshal_alpha
+    v = Gem::Version.new("5.2.4.a")
+    assert_equal v, YAML.load(YAML.dump(v))
+    assert_equal v, YAML.load(YAML.dump(Gem::Version.new([5,2,4,"a"])))
+  end
+
   def assert_adequate(version, requirement)
     ver = Gem::Version.new(version)
     req = Gem::Requirement.new(requirement)
@@ -281,36 +305,6 @@ class TestGemVersion < RubyGemTestCase
   def assert_version(actual)
     assert_equal @v1_0, actual
     assert_equal @v1_0.version, actual.version
-  end
-
-  def part_values(*parts)
-    parts.flatten.map { |part| part.value }
-  end
-end
-
-class TestGemVersionPart < RubyGemTestCase
-  def test_initialize
-    assert_equal 1, Gem::Version::Part.new(1).value
-    assert_equal 1, Gem::Version::Part.new("1").value
-    assert_equal "a", Gem::Version::Part.new("a").value
-  end
-
-  def test_spaceship
-    assert_equal(-1, Gem::Version::Part.new(1) <=> Gem::Version::Part.new(2))
-    assert_equal( 0, Gem::Version::Part.new(2) <=> Gem::Version::Part.new(2))
-    assert_equal( 1, Gem::Version::Part.new(2) <=> Gem::Version::Part.new(1))
-
-    assert_equal(-1, Gem::Version::Part.new("a") <=> Gem::Version::Part.new("b"))
-    assert_equal( 0, Gem::Version::Part.new("b") <=> Gem::Version::Part.new("b"))
-    assert_equal( 1, Gem::Version::Part.new("b") <=> Gem::Version::Part.new("a"))
-
-    assert_equal(-1, Gem::Version::Part.new("a") <=> Gem::Version::Part.new(1))
-    assert_equal( 1, Gem::Version::Part.new(1)   <=> Gem::Version::Part.new("a"))
-  end
-
-  def test_succ
-    assert_equal 2, Gem::Version::Part.new(1).succ.value
-    assert_equal "b", Gem::Version::Part.new("a").succ.value
   end
 end
 

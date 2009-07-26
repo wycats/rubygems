@@ -27,59 +27,12 @@
 
 class Gem::Version
 
-  class Part
-    include Comparable
-
-    attr_reader :value
-
-    def initialize(value)
-      @value = (value =~ /\A\d+\z/) ? value.to_i : value
-    end
-
-    def to_s
-      self.value.to_s
-    end
-
-    def inspect
-      @value
-    end
-
-    def alpha?
-      String === value
-    end
-
-    def numeric?
-      Fixnum === value
-    end
-
-    def <=>(other)
-      if    self.numeric? && other.alpha? then
-        1
-      elsif self.alpha? && other.numeric? then
-        -1
-      else
-        self.value <=> other.value
-      end
-    end
-
-    def succ
-      self.class.new(self.value.succ)
-    end
-  end
-
   include Comparable
 
   VERSION_PATTERN = '[0-9]+(\.[0-9a-z]+)*'
+  PATTERN = /\A\s*(#{VERSION_PATTERN})*\s*\z/
 
   attr_reader :version
-
-  def self.correct?(version)
-    pattern = /\A\s*(#{VERSION_PATTERN})*\s*\z/
-
-    version.is_a? Integer or
-      version =~ pattern or
-      version.to_s =~ pattern
-  end
 
   ##
   # Factory method to create a Version object.  Input may be a Version or a
@@ -104,81 +57,100 @@ class Gem::Version
   # series of digits or ASCII letters separated by dots.
 
   def initialize(version)
-    raise ArgumentError, "Malformed version number string #{version}" unless
-      self.class.correct?(version)
+    unless version.is_a?(Array) || version.is_a?(Integer) || version.to_s =~ PATTERN
+      raise ArgumentError, "Malformed version number string #{version}"
+    end
 
-    self.version = version
+    @rel_parts, @prerelease = [], false
+
+    if version.is_a?(Array)
+      self.parts = version
+    else
+      version = version.to_s
+      version.strip!
+      @version = version
+    end
   end
 
   def inspect # :nodoc:
-    "#<#{self.class} #{@version.inspect}>"
-  end
-
-  ##
-  # Dump only the raw version string, not the complete object
-
-  def marshal_dump
-    [@version]
-  end
-
-  ##
-  # Load custom marshal format
-
-  def marshal_load(array)
-    self.version = array[0]
-  end
-
-  def parts
-    @parts ||= normalize
+    "#<#{self.class} #{version.inspect}>"
   end
 
   ##
   # Strip ignored trailing zeros.
 
-  def normalize
-    parts_arr = parse_parts_from_version_string
-    if parts_arr.length != 1
-      parts_arr.pop while parts_arr.last && parts_arr.last.value == 0
-      parts_arr = [Part.new(0)] if parts_arr.empty?
+  def normalized_parts
+    @normalized_parts ||= begin
+      new_parts = parts.dup
+      new_parts.pop while new_parts.last == 0
+      new_parts.push(0) if new_parts.empty?
+      new_parts
     end
-    parts_arr
   end
+
+  def parts_for(parts)
+    parts.map! do |whole|
+      begin
+        part = Integer(whole)
+        @rel_parts << part unless @prerelease
+        part
+      rescue ArgumentError
+        @prerelease = true
+        whole
+      end
+    end
+  end
+
+  def parts # :nodoc:
+    @parts ||= parts_for(@version.to_s.scan(/[0-9a-z]+/i))
+  end
+
+  def parts=(parts)
+    @parts = parts_for(parts)
+  end
+
+  def marshal_load(parts)
+    if parts.size == 1 && parts[0].is_a?(String)
+      initialize(parts[0])
+    else
+      initialize(parts)
+    end
+  end
+
+  alias normalize normalized_parts
+  alias marshal_dump parts
 
   ##
   # Returns the text representation of the version
 
   def to_s
-    @version
+    version
   end
 
   def to_yaml_properties
-    ['@version']
+    version && ["@version"]
   end
 
-  def version=(version)
-    @version = version.to_s.strip
-    normalize
+  def version
+    @version ||= parts.join(".")
   end
 
   ##
   # A version is considered a prerelease if any part contains a letter.
 
   def prerelease?
-    parts.any? { |part| part.alpha? }
+    parts && @prerelease
   end
-  
+
   ##
   # The release for this version (e.g. 1.2.0.a -> 1.2.0)
   # Non-prerelease versions return themselves
   def release
-    return self unless prerelease?
-    rel_parts = parts.dup
-    rel_parts.pop while rel_parts.any? { |part| part.alpha? }
-    self.class.new(rel_parts.join('.'))
+    prerelease? ? self.class.new(@rel_parts) : self
   end
 
   def yaml_initialize(tag, values)
-    self.version = values['version']
+    initialize(values["version"])
   end
 
   ##
@@ -188,14 +160,25 @@ class Gem::Version
   def <=>(other)
     return nil unless self.class === other
     return 1 unless other
+
     mine, theirs = balance(self.parts.dup, other.parts.dup)
-    mine <=> theirs
+
+    mine.each_with_index do |part, i|
+      other_part = theirs[i]
+
+      if part.is_a?(Numeric) && other_part.is_a?(String)
+        return 1
+      elsif part.is_a?(String) && other_part.is_a?(Numeric)
+        return -1
+      elsif part != other_part
+        return part <=> other_part
+      end
+    end
+    return 0
   end
 
   def balance(a, b)
-    a << Part.new(0) while a.size < b.size
-    b << Part.new(0) while b.size < a.size
-    [a, b]
+    [a.fill(0, a.size, b.size - a.size), b.fill(0, b.size, a.size - b.size)]
   end
 
   ##
@@ -203,11 +186,11 @@ class Gem::Version
   # string.  "1.0" is not the same version as "1".
 
   def eql?(other)
-    self.class === other and @version == other.version
+    other.is_a?(self.class) and parts == other.parts
   end
 
   def hash # :nodoc:
-    @version.hash
+    parts.hash
   end
 
   ##
@@ -217,15 +200,13 @@ class Gem::Version
   # Pre-release (alpha) parts are ignored. (e.g 5.3.1.b2 => 5.4)
 
   def bump
-    parts = parse_parts_from_version_string
-    parts.pop while parts.any? { |part| part.alpha? }
-    parts.pop if parts.size > 1
-    parts[-1] = parts[-1].succ
-    self.class.new(parts.join("."))
-  end
+    new_parts = parts.dup
+    new_parts.pop while new_parts.last.is_a?(String)
+    new_parts.pop if new_parts.size > 1
 
-  def parse_parts_from_version_string # :nodoc:
-    @version.to_s.scan(/[0-9a-z]+/i).map { |s| Part.new(s) }
+    new_parts.push new_parts.pop.succ
+
+    self.class.new(new_parts)
   end
 
   def pretty_print(q) # :nodoc:
